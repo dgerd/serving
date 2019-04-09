@@ -392,9 +392,7 @@ func (rt *Revision) CheckImmutableFields(ctx context.Context, og apis.Immutable)
 			Paths:   []string{"spec"},
 			Details: err.Error(),
 		}
-	}
-
-	if !equal {
+	} else if !equal {
 		return &apis.FieldError{
 			Message: "Immutable fields changed (-old +new)",
 			Paths:   []string{"spec"},
