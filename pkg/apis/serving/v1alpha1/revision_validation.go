@@ -207,10 +207,19 @@ func validateContainer(container corev1.Container, volumes sets.String) *apis.Fi
 		return apis.ErrMissingField(apis.CurrentField)
 	}
 
+	kcontainer := KnativeContainer(&container)
+
+	// Some corev1.Container fields are set by Knative Serving controller.  We disallow them
+	// here to avoid silently overwriting these fields and causing confusions for
+	// the users.  See pkg/controller/revision/resources/deploy.go#makePodSpec.
+	var errs *apis.FieldError
+	if disallowed := utils.ValidateFields(*kcontainer, container); len(disallowed) > 0 {
+		errs = errs.Also(apis.ErrDisallowedFields(disallowed...))
+	}
+
 	// Check that volume mounts match names in "volumes", that "volumes" has 100%
 	// coverage, and the field restrictions.
 	seen := sets.NewString()
-	var errs *apis.FieldError
 	for i, vm := range container.VolumeMounts {
 		// This effectively checks that Name is non-empty because Volume name must be non-empty.
 		if !volumes.Has(vm.Name) {
@@ -252,21 +261,6 @@ func validateContainer(container corev1.Container, volumes sets.String) *apis.Fi
 		})
 	}
 
-	// Some corev1.Container fields are set by Knative Serving controller.  We disallow them
-	// here to avoid silently overwriting these fields and causing confusions for
-	// the users.  See pkg/controller/revision/resources/deploy.go#makePodSpec.
-	var ignoredFields []string
-	if container.Name != "" {
-		ignoredFields = append(ignoredFields, "name")
-	}
-
-	if container.Lifecycle != nil {
-		ignoredFields = append(ignoredFields, "lifecycle")
-	}
-	if len(ignoredFields) > 0 {
-		// Complain about all ignored fields so that user can remove them all at once.
-		errs = errs.Also(apis.ErrDisallowedFields(ignoredFields...))
-	}
 	if err := validateContainerPorts(container.Ports); err != nil {
 		errs = errs.Also(err.ViaField("ports"))
 	}
