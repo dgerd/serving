@@ -42,18 +42,17 @@ var (
 		"/var",
 		"/var/log",
 	)
-)
 
-// Validate ensures Revision is properly configured.
-func (rt *Revision) Validate(ctx context.Context) *apis.FieldError {
-	errs := serving.ValidateObjectMetadata(rt.GetObjectMeta()).ViaField("metadata")
-	errs = errs.Also(rt.Spec.Validate(apis.WithinSpec(ctx)).ViaField("spec"))
-	if apis.IsInUpdate(ctx) {
-		old := apis.GetBaseline(ctx).(*Revision)
-		errs = errs.Also(rt.checkImmutableFields(ctx, old))
-	}
-	return errs
-}
+	// The port is named "user-port" on the deployment, but a user cannot set an arbitrary name on the port
+	// in Configuration. The name field is reserved for content-negotiation. Currently 'h2c' and 'http1' are
+	// allowed.
+	// https://github.com/knative/serving/blob/master/docs/runtime-contract.md#inbound-network-connectivity
+	validPortNames = sets.NewString(
+		"h2c",
+		"http1",
+		"",
+	)
+)
 
 func (current *Revision) checkImmutableFields(ctx context.Context, original *Revision) *apis.FieldError {
 	if diff, err := kmp.ShortDiff(original.Spec, current.Spec); err != nil {
@@ -70,6 +69,17 @@ func (current *Revision) checkImmutableFields(ctx context.Context, original *Rev
 		}
 	}
 	return nil
+}
+
+// Validate ensures Revision is properly configured.
+func (rt *Revision) Validate(ctx context.Context) *apis.FieldError {
+	errs := serving.ValidateObjectMetadata(rt.GetObjectMeta()).ViaField("metadata")
+	errs = errs.Also(rt.Spec.Validate(apis.WithinSpec(ctx)).ViaField("spec"))
+	if apis.IsInUpdate(ctx) {
+		old := apis.GetBaseline(ctx).(*Revision)
+		errs = errs.Also(rt.checkImmutableFields(ctx, old))
+	}
+	return errs
 }
 
 // Validate ensures RevisionTemplateSpec is properly configured.
@@ -127,17 +137,6 @@ func (rs *RevisionSpec) Validate(ctx context.Context) *apis.FieldError {
 	return errs
 }
 
-func validateTimeoutSeconds(timeoutSeconds int64) *apis.FieldError {
-	if timeoutSeconds != 0 {
-		if timeoutSeconds > int64(networking.DefaultTimeout.Seconds()) || timeoutSeconds < 0 {
-			return apis.ErrOutOfBoundsValue(timeoutSeconds, 0,
-				networking.DefaultTimeout.Seconds(),
-				"timeoutSeconds")
-		}
-	}
-	return nil
-}
-
 // Validate ensures RevisionRequestConcurrencyModelType is properly configured.
 func (ss DeprecatedRevisionServingStateType) Validate(ctx context.Context) *apis.FieldError {
 	switch ss {
@@ -184,8 +183,19 @@ func ValidateContainerConcurrency(cc RevisionContainerConcurrencyType, cm Revisi
 	return nil
 }
 
+func validateTimeoutSeconds(timeoutSeconds int64) *apis.FieldError {
+	if timeoutSeconds != 0 {
+		if timeoutSeconds > int64(networking.DefaultTimeout.Seconds()) || timeoutSeconds < 0 {
+			return apis.ErrOutOfBoundsValue(timeoutSeconds, 0,
+				networking.DefaultTimeout.Seconds(),
+				"timeoutSeconds")
+		}
+	}
+	return nil
+}
+
 func validateVolume(volume corev1.Volume) *apis.FieldError {
-	var errs *apis.FieldError
+	errs := validateDisallowedFields(volume, *VolumeMask(&volume))
 	if volume.Name == "" {
 		errs = apis.ErrMissingField("name")
 	} else if len(validation.IsDNS1123Label(volume.Name)) != 0 {
@@ -193,11 +203,51 @@ func validateVolume(volume corev1.Volume) *apis.FieldError {
 	}
 
 	vs := volume.VolumeSource
-	switch {
-	case vs.Secret != nil, vs.ConfigMap != nil:
-		// These are fine.
-	default:
+	errs = errs.Also(validateDisallowedFields(vs, *VolumeSourceMask(&vs)))
+	if vs.Secret == nil && vs.ConfigMap == nil {
 		errs = errs.Also(apis.ErrMissingOneOf("secret", "configMap"))
+	}
+	return errs
+}
+
+func validateEnvValueFrom(source *corev1.EnvVarSource) *apis.FieldError {
+	return validateDisallowedFields(source, EnvVarSourceMask(source))
+}
+
+func validateEnv(envVars []corev1.EnvVar) *apis.FieldError {
+	var errs *apis.FieldError
+	for i, env := range envVars {
+		errs := errs.Also(validateDisallowedFields(env, *EnvVarMask(&env)).ViaIndex(i))
+		if env.ValueFrom != nil {
+			errs = errs.Also(validateEnvValueFrom(env.ValueFrom))
+		}
+	}
+	return errs
+}
+
+func validateEnvFrom(envFromList []corev1.EnvFromSource) *apis.FieldError {
+	var errs *apis.FieldError
+	for i, envFrom := range envFromList {
+		errs = errs.Also(validateDisallowedFields(envFrom, *EnvFromSourceMask(&envFrom)).ViaIndex(i))
+
+		cm := envFrom.ConfigMapRef
+		sm := envFrom.SecretRef
+		if sm != nil {
+			errs = errs.Also(validateDisallowedFields(sm, SecretMapEnvSourceMask(sm)).ViaIndex(i))
+			errs = errs.Also(validateDisallowedFields(
+				sm.LocalObjectReference, *LocalObjectReferenceMask(&sm.LocalObjectReference))).ViaIndex(i).ViaField("secretRef")
+		}
+
+		if cm != nil {
+			errs = errs.Also(validateDisallowedFields(cm, ConfigMapEnvSourceMask(cm)).ViaIndex(i))
+			errs = errs.Also(validateDisallowedFields(
+				cm.LocalObjectReference, *LocalObjectReferenceMask(&cm.LocalObjectReference))).ViaIndex(i).ViaField("configMapRef")
+		}
+		if cm != nil && sm != nil {
+			errs = errs.Also(apis.ErrMultipleOneOf("configMapRef", "secretRef"))
+		} else if cm == nil && sm == nil {
+			errs = errs.Also(apis.ErrMissingOneOf("configMapRef", "secretRef"))
+		}
 	}
 	return errs
 }
@@ -207,70 +257,21 @@ func validateContainer(container corev1.Container, volumes sets.String) *apis.Fi
 		return apis.ErrMissingField(apis.CurrentField)
 	}
 
-	kcontainer := KnativeContainer(&container)
-
 	// Some corev1.Container fields are set by Knative Serving controller.  We disallow them
 	// here to avoid silently overwriting these fields and causing confusions for
 	// the users.  See pkg/controller/revision/resources/deploy.go#makePodSpec.
-	var errs *apis.FieldError
-	if disallowed := utils.ValidateFields(*kcontainer, container); len(disallowed) > 0 {
-		errs = errs.Also(apis.ErrDisallowedFields(disallowed...))
-	}
+	errs := validateDisallowedFields(container, *ContainerMask(&container))
 
-	// Check that volume mounts match names in "volumes", that "volumes" has 100%
-	// coverage, and the field restrictions.
-	seen := sets.NewString()
-	for i, vm := range container.VolumeMounts {
-		// This effectively checks that Name is non-empty because Volume name must be non-empty.
-		if !volumes.Has(vm.Name) {
-			errs = errs.Also((&apis.FieldError{
-				Message: "volumeMount has no matching volume",
-				Paths:   []string{"name"},
-			}).ViaFieldIndex("volumeMounts", i))
-		}
-		seen.Insert(vm.Name)
+	// TODO: Args
+	// TODO: Command
 
-		if vm.MountPath == "" {
-			errs = errs.Also(apis.ErrMissingField("mountPath").ViaFieldIndex("volumeMounts", i))
-		} else if reservedPaths.Has(filepath.Clean(vm.MountPath)) {
-			errs = errs.Also((&apis.FieldError{
-				Message: fmt.Sprintf("mountPath %q is a reserved path", filepath.Clean(vm.MountPath)),
-				Paths:   []string{"mountPath"},
-			}).ViaFieldIndex("volumeMounts", i))
-		} else if !filepath.IsAbs(vm.MountPath) {
-			errs = errs.Also(apis.ErrInvalidValue(vm.MountPath, "mountPath").ViaFieldIndex("volumeMounts", i))
-		}
-		if !vm.ReadOnly {
-			errs = errs.Also(apis.ErrMissingField("readOnly").ViaFieldIndex("volumeMounts", i))
-		}
+	// Env
+	errs = errs.Also(validateEnv(container.Env).ViaField("env"))
 
-		if vm.SubPath != "" {
-			errs = errs.Also(
-				apis.ErrDisallowedFields("subPath").ViaFieldIndex("volumeMounts", i))
-		}
-		if vm.MountPropagation != nil {
-			errs = errs.Also(
-				apis.ErrDisallowedFields("mountPropagation").ViaFieldIndex("volumeMounts", i))
-		}
-	}
+	// EnvFrom
+	errs = errs.Also(validateEnvFrom(container.EnvFrom).ViaField("envFrom"))
 
-	if missing := volumes.Difference(seen); missing.Len() > 0 {
-		errs = errs.Also(&apis.FieldError{
-			Message: fmt.Sprintf("volumes not mounted: %v", missing.List()),
-			Paths:   []string{"volumeMounts"},
-		})
-	}
-
-	if err := validateContainerPorts(container.Ports); err != nil {
-		errs = errs.Also(err.ViaField("ports"))
-	}
-	// Validate our probes
-	if err := validateProbe(container.ReadinessProbe).ViaField("readinessProbe"); err != nil {
-		errs = errs.Also(err)
-	}
-	if err := validateProbe(container.LivenessProbe).ViaField("livenessProbe"); err != nil {
-		errs = errs.Also(err)
-	}
+	// Image
 	if _, err := name.ParseReference(container.Image, name.WeakValidation); err != nil {
 		fe := &apis.FieldError{
 			Message: "Failed to parse image reference",
@@ -279,18 +280,81 @@ func validateContainer(container corev1.Container, volumes sets.String) *apis.Fi
 		}
 		errs = errs.Also(fe)
 	}
+
+	// Liveness Probes
+	errs = errs.Also(validateProbe(container.LivenessProbe).ViaField("livenessProbe"))
+
+	// Ports
+	errs = errs.Also(validateContainerPorts(container.Ports).ViaField("ports"))
+
+	// Readiness Probes
+	errs = errs.Also(validateProbe(container.ReadinessProbe).ViaField("readinessProbe"))
+
+	// TODO: Resources
+
+	// TODO: SecurityContext
+
+	// TODO: TerminationMessagePath
+	// TODO: TerminationMessagePolicy
+
+	// VolumeMounts
+	errs = errs.Also(validateVolumeMounts(container.VolumeMounts, volumes).ViaField("volumeMounts"))
+
 	return errs
 }
 
-// The port is named "user-port" on the deployment, but a user cannot set an arbitrary name on the port
-// in Configuration. The name field is reserved for content-negotiation. Currently 'h2c' and 'http1' are
-// allowed.
-// https://github.com/knative/serving/blob/master/docs/runtime-contract.md#inbound-network-connectivity
-var validPortNames = sets.NewString(
-	"h2c",
-	"http1",
-	"",
-)
+func validateVolumeMounts(mounts []corev1.VolumeMount, volumes sets.String) *apis.FieldError {
+	var errs *apis.FieldError
+	// Check that volume mounts match names in "volumes", that "volumes" has 100%
+	// coverage, and the field restrictions.
+	seen := sets.NewString()
+	for i, vm := range mounts {
+
+		errs = errs.Also(validateDisallowedFields(vm, *VolumeMountMask(&vm)).ViaIndex(i))
+		// This effectively checks that Name is non-empty because Volume name must be non-empty.
+		if !volumes.Has(vm.Name) {
+			errs = errs.Also((&apis.FieldError{
+				Message: "volumeMount has no matching volume",
+				Paths:   []string{"name"},
+			}).ViaIndex(i))
+		}
+		seen.Insert(vm.Name)
+
+		if vm.MountPath == "" {
+			errs = errs.Also(apis.ErrMissingField("mountPath").ViaIndex(i))
+		} else if reservedPaths.Has(filepath.Clean(vm.MountPath)) {
+			errs = errs.Also((&apis.FieldError{
+				Message: fmt.Sprintf("mountPath %q is a reserved path", filepath.Clean(vm.MountPath)),
+				Paths:   []string{"mountPath"},
+			}).ViaIndex(i))
+		} else if !filepath.IsAbs(vm.MountPath) {
+			errs = errs.Also(apis.ErrInvalidValue(vm.MountPath, "mountPath").ViaIndex(i))
+		}
+		if !vm.ReadOnly {
+			errs = errs.Also(apis.ErrMissingField("readOnly").ViaIndex(i))
+		}
+
+	}
+
+	if missing := volumes.Difference(seen); missing.Len() > 0 {
+		errs = errs.Also(&apis.FieldError{
+			Message: fmt.Sprintf("volumes not mounted: %v", missing.List()),
+			Paths:   []string{""},
+		})
+	}
+	return errs
+}
+
+func validateDisallowedFields(request, maskedRequest interface{}) *apis.FieldError {
+	if disallowed, err := kmp.CompareSetFields(request, maskedRequest); err != nil {
+		return &apis.FieldError{
+			Message: "Internal Error",
+		}
+	} else if len(disallowed) > 0 {
+		return apis.ErrDisallowedFields(disallowed...)
+	}
+	return nil
+}
 
 func validateContainerPorts(ports []corev1.ContainerPort) *apis.FieldError {
 	if len(ports) == 0 {
@@ -311,34 +375,24 @@ func validateContainerPorts(ports []corev1.ContainerPort) *apis.FieldError {
 	}
 
 	userPort := ports[0]
+
+	errs = errs.Also(validateDisallowedFields(userPort, *ContainerPortMask(&userPort)))
+
 	// Only allow empty (defaulting to "TCP") or explicit TCP for protocol
 	if userPort.Protocol != "" && userPort.Protocol != corev1.ProtocolTCP {
-		errs = errs.Also(apis.ErrInvalidValue(userPort.Protocol, "Protocol"))
-	}
-
-	// Don't allow HostIP or HostPort to be set
-	var disallowedFields []string
-	if userPort.HostIP != "" {
-		disallowedFields = append(disallowedFields, "HostIP")
-
-	}
-	if userPort.HostPort != 0 {
-		disallowedFields = append(disallowedFields, "HostPort")
-	}
-	if len(disallowedFields) != 0 {
-		errs = errs.Also(apis.ErrDisallowedFields(disallowedFields...))
+		errs = errs.Also(apis.ErrInvalidValue(userPort.Protocol, "protocol"))
 	}
 
 	// Don't allow userPort to conflict with QueueProxy sidecar
 	if userPort.ContainerPort == RequestQueuePort ||
 		userPort.ContainerPort == RequestQueueAdminPort ||
 		userPort.ContainerPort == RequestQueueMetricsPort {
-		errs = errs.Also(apis.ErrInvalidValue(userPort.ContainerPort, "ContainerPort"))
+		errs = errs.Also(apis.ErrInvalidValue(userPort.ContainerPort, "containerPort"))
 	}
 
 	if userPort.ContainerPort < 1 || userPort.ContainerPort > 65535 {
 		errs = errs.Also(apis.ErrOutOfBoundsValue(userPort.ContainerPort,
-			1, 65535, "ContainerPort"))
+			1, 65535, "containerPort"))
 	}
 
 	if !validPortNames.Has(userPort.Name) {

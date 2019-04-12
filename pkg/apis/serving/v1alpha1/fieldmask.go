@@ -20,120 +20,274 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// KnativeContainer performs a deep copy of the Kubernetes Container object to a new
-// Kubernetes Container object bringing over only the fields allowed in the Knative API. This
+// VolumeMask performs a _shallow_ copy of the Kubernetes Volume object to a new
+// Kubernetes Volume object bringing over only the fields allowed in the Knative API. This
 // does not validate the contents or the bounds of the provided fields.
-func KnativeContainer(in *corev1.Container) *corev1.Container {
+func VolumeMask(in *corev1.Volume) *corev1.Volume {
 	if in == nil {
 		return nil
 	}
-	out := new(corev1.Container)
-	// Args is allowed
-	if in.Args != nil {
-		in, out := &in.Args, &out.Args
-		*out = make([]string, len(*in))
-		copy(*out, *in)
-	}
-	// Command is allowed
-	if in.Command != nil {
-		in, out := &in.Command, &out.Command
-		*out = make([]string, len(*in))
-		copy(*out, *in)
-	}
-	// Env is allowed with restricted fields
-	if in.Env != nil {
-		in, out := &in.Env, &out.Env
-		*out = make([]corev1.EnvVar, len(*in))
-		for i := range *in {
-			knativeEnvVar(&(*in)[i], &(*out)[i])
-		}
-	}
-	// EnvFrom is allowed
-	if in.EnvFrom != nil {
-		in, out := &in.EnvFrom, &out.EnvFrom
-		*out = make([]corev1.EnvFromSource, len(*in))
-		for i := range *in {
-			//TODO: Should we really still DeepCopy versus copying each field?
-			(*in)[i].DeepCopyInto(&(*out)[i])
-		}
-	}
-	// Image is allowed
-	out.Image = in.Image
-	// ImagePullPolicy is not allowed
-	// Lifecycle is not allowed
-	// LivenessProbe is allowed with restricted fields
-	if in.LivenessProbe != nil {
-		in, out := &in.LivenessProbe, &out.LivenessProbe
-		*out = new(corev1.Probe)
-		(*in).DeepCopyInto(*out)
-	}
-	// Name is not allowed
-	// Ports is allowed with restricted fields
-	// TODO: Enforce restrictions
-	if in.Ports != nil {
-		in, out := &in.Ports, &out.Ports
-		*out = make([]corev1.ContainerPort, len(*in))
-		copy(*out, *in)
-	}
-	// ReadinessProbe is allowed with restricted fields
-	// TODO: Enforce restrictions
-	if in.ReadinessProbe != nil {
-		in, out := &in.ReadinessProbe, &out.ReadinessProbe
-		*out = new(corev1.Probe)
-		(*in).DeepCopyInto(*out)
-	}
-	// Resource is allowed
-	in.Resources.DeepCopyInto(&out.Resources)
-	// SecurityContext is allowed with restricted fields
-	if in.SecurityContext != nil {
-		in, out := &in.SecurityContext, &out.SecurityContext
-		*out = new(corev1.SecurityContext)
-		(*in).DeepCopyInto(*out)
-	}
-	// Stdin is not allowed
-	// StdinOnce is not allowed
-	// TerminationMessagePath is allowed
-	out.TerminationMessagePath = in.TerminationMessagePath
-	// TerminationMessagePolicy is allowed
-	out.TerminationMessagePolicy = in.TerminationMessagePolicy
-	// TTY is not allowed
-	// VolumeDevices is not allowed
-	// VolumeMounts is allowed with restricted fields
-	if in.VolumeMounts != nil {
-		in, out := &in.VolumeMounts, &out.VolumeMounts
-		*out = make([]corev1.VolumeMount, len(*in))
-		for i := range *in {
-			(*in)[i].DeepCopyInto(&(*out)[i])
-		}
-	}
+
+	out := new(corev1.Volume)
+
+	//Allowed fields
+	out.Name = in.Name
+	out.VolumeSource = in.VolumeSource
+
 	return out
 }
 
-func knativeEnvVar(in, out *corev1.EnvVar) {
-	out.Name = in.Name
-	out.Value = in.Value
-	if in.ValueFrom != nil {
-		in, out := &in.ValueFrom, &out.ValueFrom
-		*out = new(corev1.EnvVarSource)
-		knativeEnvVarSource(*in, *out)
+// VolumeSourceMask performs a _shallow_ copy of the Kubernetes VolumeSource object to a new
+// Kubernetes VolumeSource object bringing over only the fields allowed in the Knative API. This
+// does not validate the contents or the bounds of the provided fields.
+func VolumeSourceMask(in *corev1.VolumeSource) *corev1.VolumeSource {
+	if in == nil {
+		return nil
 	}
-	return
+
+	out := new(corev1.VolumeSource)
+
+	// Allowed fields
+	out.Secret = in.Secret
+	out.ConfigMap = in.ConfigMap
+
+	// Too many disallowed fields to list
+
+	return out
 }
 
-func knativeEnvVarSource(in, out *corev1.EnvVarSource) {
-	// FieldRef is not allowed
+// ContainerMask performs a _shallow_ copy of the Kubernetes Container object to a new
+// Kubernetes Container object bringing over only the fields allowed in the Knative API. This
+// does not validate the contents or the bounds of the provided fields.
+func ContainerMask(in *corev1.Container) *corev1.Container {
+	if in == nil {
+		return nil
+	}
+
+	out := new(corev1.Container)
+
+	// Allowed fields
+	out.Args = in.Args
+	out.Command = in.Command
+	out.Env = in.Env
+	out.EnvFrom = in.EnvFrom
+	out.Image = in.Image
+	out.LivenessProbe = in.LivenessProbe
+	out.Ports = in.Ports
+	out.ReadinessProbe = in.ReadinessProbe
+	out.Resources = in.Resources
+	out.SecurityContext = in.SecurityContext
+	out.TerminationMessagePath = in.TerminationMessagePath
+	out.TerminationMessagePolicy = in.TerminationMessagePolicy
+	out.VolumeMounts = in.VolumeMounts
+
+	// Disallowed fields
+	// This list is unneccessry, but added here for clarity
+	out.ImagePullPolicy = ""
+	out.Lifecycle = nil
+	out.Name = ""
+	out.Stdin = false
+	out.StdinOnce = false
+	out.TTY = false
+	out.VolumeDevices = nil
+
+	return out
+}
+
+// VolumeMountMask performs a _shallow_ copy of the Kubernetes VolumeMount object to a new
+// Kubernetes VolumeMount object bringing over only the fields allowed in the Knative API. This
+// does not validate the contents or the bounds of the provided fields.
+func VolumeMountMask(in *corev1.VolumeMount) *corev1.VolumeMount {
+	if in == nil {
+		return nil
+	}
+
+	out := new(corev1.VolumeMount)
+
+	// Allowed fields
+	out.Name = in.Name
+	out.ReadOnly = in.ReadOnly
+	out.MountPath = in.MountPath
+
+	// Disallowed fields
+	// This list is unneccessry, but added here for clarity
+	out.SubPath = ""
+	out.MountPropagation = nil
+
+	return out
+}
+
+// ProbeMask performs a _shallow_ copy of the Kubernetes Probe object to a new
+// Kubernetes Probe object bringing over only the fields allowed in the Knative API. This
+// does not validate the contents or the bounds of the provided fields.
+func ProbeMask(in *corev1.Probe) *corev1.Probe {
+	if in == nil {
+		return nil
+	}
+	out := new(corev1.Probe)
+
+	// Allowed fields
+	out.Handler = in.Handler
+	out.InitialDelaySeconds = in.InitialDelaySeconds
+	out.TimeoutSeconds = in.TimeoutSeconds
+	out.PeriodSeconds = in.PeriodSeconds
+	out.SuccessThreshold = in.SuccessThreshold
+	out.FailureThreshold = in.FailureThreshold
+
+	return out
+}
+
+// ContainerPortMask performs a _shallow_ copy of the Kubernetes ContainerPort object to a new
+// Kubernetes ContainerPort object bringing over only the fields allowed in the Knative API. This
+// does not validate the contents or the bounds of the provided fields.
+func ContainerPortMask(in *corev1.ContainerPort) *corev1.ContainerPort {
+	if in == nil {
+		return nil
+	}
+
+	out := new(corev1.ContainerPort)
+
+	// Allowed fields
+	out.ContainerPort = in.ContainerPort
+	out.Name = in.Name
+	out.Protocol = in.Protocol
+
+	//Disallowed fields
+	// This list is unneccessry, but added here for clarity
+	out.HostIP = ""
+	out.HostPort = 0
+
+	return out
+}
+
+// EnvVarMask performs a _shallow_ copy of the Kubernetes EnvVar object to a new
+// Kubernetes EnvVar object bringing over only the fields allowed in the Knative API. This
+// does not validate the contents or the bounds of the provided fields.
+func EnvVarMask(in *corev1.EnvVar) *corev1.EnvVar {
+	if in == nil {
+		return nil
+	}
+
+	out := new(corev1.EnvVar)
+
+	// Allowed fields
+	out.Name = in.Name
+	out.Value = in.Value
+	out.ValueFrom = in.ValueFrom
+
+	return out
+}
+
+// EnvVarSourceMask performs a _shallow_ copy of the Kubernetes EnvVarSource object to a new
+// Kubernetes EnvVarSource object bringing over only the fields allowed in the Knative API. This
+// does not validate the contents or the bounds of the provided fields.
+func EnvVarSourceMask(in *corev1.EnvVarSource) *corev1.EnvVarSource {
+	if in == nil {
+		return nil
+	}
+
+	out := new(corev1.EnvVarSource)
+
+	//Allowed fields
+	out.ConfigMapKeyRef = in.ConfigMapKeyRef
+	out.SecretKeyRef = in.SecretKeyRef
+
+	// Disallowed
+	// This list is unneccessry, but added here for clarity
 	out.FieldRef = nil
-	// ResourceFieldRef is not allowed
 	out.ResourceFieldRef = nil
-	if in.ConfigMapKeyRef != nil {
-		in, out := &in.ConfigMapKeyRef, &out.ConfigMapKeyRef
-		*out = new(corev1.ConfigMapKeySelector)
-		(*in).DeepCopyInto(*out)
+
+	return out
+}
+
+func LocalObjectReferenceMask(in *corev1.LocalObjectReference) *corev1.LocalObjectReference {
+	if in == nil {
+		return nil
 	}
-	if in.SecretKeyRef != nil {
-		in, out := &in.SecretKeyRef, &out.SecretKeyRef
-		*out = new(corev1.SecretKeySelector)
-		(*in).DeepCopyInto(*out)
+
+	out := new(corev1.LocalObjectReference)
+
+	out.Name = in.Name
+
+	return out
+}
+
+func ConfigMapKeySelectorMask(in *corev1.ConfigMapKeySelector) *corev1.ConfigMapKeySelector {
+	if in == nil {
+		return nil
 	}
-	return
+
+	out := new(corev1.ConfigMapKeySelector)
+
+	// Allowed fields
+	out.Key = in.Key
+	out.Optional = in.Optional
+	out.LocalObjectReference = in.LocalObjectReference
+
+	return out
+
+}
+
+func SecretKeySelectorMask(in *corev1.SecretKeySelector) *corev1.SecretKeySelector {
+	if in == nil {
+		return nil
+	}
+
+	out := new(corev1.SecretKeySelector)
+
+	// Allowed fields
+	out.Key = in.Key
+	out.Optional = in.Optional
+	out.LocalObjectReference = in.LocalObjectReference
+
+	return out
+
+}
+
+func ConfigMapEnvSourceMask(in *corev1.ConfigMapEnvSource) *corev1.ConfigMapEnvSource {
+	if in == nil {
+		return nil
+	}
+
+	out := new(corev1.ConfigMapEnvSource)
+
+	// Allowed fields
+	out.Optional = in.Optional
+	out.LocalObjectReference = in.LocalObjectReference
+
+	return out
+
+}
+
+func SecretMapEnvSourceMask(in *corev1.SecretEnvSource) *corev1.SecretEnvSource {
+	if in == nil {
+		return nil
+	}
+
+	out := new(corev1.SecretEnvSource)
+
+	// Allowed fields
+	out.Optional = in.Optional
+	out.LocalObjectReference = in.LocalObjectReference
+
+	return out
+
+}
+
+// EnvFromSourceMask performs a _shallow_ copy of the Kubernetes EnvFromSource object to a new
+// Kubernetes EnvFromSource object bringing over only the fields allowed in the Knative API. This
+// does not validate the contents or the bounds of the provided fields.
+func EnvFromSourceMask(in *corev1.EnvFromSource) *corev1.EnvFromSource {
+	if in == nil {
+		return nil
+	}
+
+	out := new(corev1.EnvFromSource)
+
+	// Allowed fields
+	out.Prefix = in.Prefix
+	out.ConfigMapRef = in.ConfigMapRef
+	out.SecretRef = in.SecretRef
+
+	return out
 }

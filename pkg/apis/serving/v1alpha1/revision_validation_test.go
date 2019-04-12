@@ -132,14 +132,14 @@ func TestContainerValidation(t *testing.T) {
 				ContainerPort: 65536,
 			}},
 		},
-		want: apis.ErrOutOfBoundsValue(65536, 1, 65535, "ports.ContainerPort"),
+		want: apis.ErrOutOfBoundsValue(65536, 1, 65535, "ports.containerPort"),
 	}, {
 		name: "has an empty port set",
 		c: corev1.Container{
 			Image: "foo",
 			Ports: []corev1.ContainerPort{{}},
 		},
-		want: apis.ErrOutOfBoundsValue(0, 1, 65535, "ports.ContainerPort"),
+		want: apis.ErrOutOfBoundsValue(0, 1, 65535, "ports.containerPort"),
 	}, {
 		name: "has more than one unnamed port",
 		c: corev1.Container{
@@ -174,7 +174,7 @@ func TestContainerValidation(t *testing.T) {
 				ContainerPort: 8080,
 			}},
 		},
-		want: apis.ErrInvalidValue("tdp", "ports.Protocol"),
+		want: apis.ErrInvalidValue("tdp", "ports.protocol"),
 	}, {
 		name: "has host port",
 		c: corev1.Container{
@@ -184,7 +184,7 @@ func TestContainerValidation(t *testing.T) {
 				ContainerPort: 8080,
 			}},
 		},
-		want: apis.ErrDisallowedFields("ports.HostPort"),
+		want: apis.ErrDisallowedFields("ports.hostPort"),
 	}, {
 		name: "has host ip",
 		c: corev1.Container{
@@ -194,7 +194,7 @@ func TestContainerValidation(t *testing.T) {
 				ContainerPort: 8080,
 			}},
 		},
-		want: apis.ErrDisallowedFields("ports.HostIP"),
+		want: apis.ErrDisallowedFields("ports.hostIP"),
 	}, {
 		name: "port conflicts with queue proxy admin",
 		c: corev1.Container{
@@ -203,7 +203,7 @@ func TestContainerValidation(t *testing.T) {
 				ContainerPort: 8022,
 			}},
 		},
-		want: apis.ErrInvalidValue(8022, "ports.ContainerPort"),
+		want: apis.ErrInvalidValue(8022, "ports.containerPort"),
 	}, {
 		name: "port conflicts with queue proxy",
 		c: corev1.Container{
@@ -212,7 +212,7 @@ func TestContainerValidation(t *testing.T) {
 				ContainerPort: 8012,
 			}},
 		},
-		want: apis.ErrInvalidValue(8012, "ports.ContainerPort"),
+		want: apis.ErrInvalidValue(8012, "ports.containerPort"),
 	}, {
 		name: "port conflicts with queue proxy metrics",
 		c: corev1.Container{
@@ -221,7 +221,7 @@ func TestContainerValidation(t *testing.T) {
 				ContainerPort: 9090,
 			}},
 		},
-		want: apis.ErrInvalidValue(9090, "ports.ContainerPort"),
+		want: apis.ErrInvalidValue(9090, "ports.containerPort"),
 	}, {
 		name: "has invalid port name",
 		c: corev1.Container{
@@ -433,7 +433,7 @@ func TestVolumeValidation(t *testing.T) {
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
 		},
-		want: apis.ErrMissingOneOf("secret", "configMap"),
+		want: apis.ErrMissingOneOf("secret", "configMap").Also(apis.ErrDisallowedFields("emptyDir")),
 	}, {
 		name: "no volume source",
 		v: corev1.Volume{

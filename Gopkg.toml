@@ -25,7 +25,7 @@ required = [
 [[override]]
   name = "github.com/knative/pkg"
   # HEAD as of 2019-04-12
-  revision = "0cd794873d12608cba8f6fef5cc0cd0f035ab1e5"
+  revision = "87aa3743972e1f2a23ee54577c53d820f082de86"
   # REMOVE BEFORE MERGING
   source = "github.com/dgerd/pkg"
 
